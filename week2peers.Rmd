@@ -1,0 +1,273 @@
+---
+title: 'Coursera Capstone Project Week 2: Peer Review'
+author: "Roel Peters"
+date: "25 november 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen=999)
+set.seed(03031988)
+library(tm)
+library(SnowballC)
+library(dplyr)
+library(slam)
+library(pander)
+library(knitr)
+library(tibble)
+library(e1071) 
+```
+
+## Loading datasets & generating samples
+
+The following code loads the Twitter, news and blog data. The complete data is cleaned in the following way:
+
+* Removal of redundant whitespaces
+* Stemming. The process of simplifying words to their stem. More info: https://en.wikipedia.org/wiki/Stemming
+* Transformation of all words to full lowercase
+
+In a later phase of the research, the data is also stripped of its 'stop words'. Lastly, each dataset also gets a randomly selected sample for processing speed purposes.
+
+```{r getData, cache=TRUE,include=FALSE}
+suppressWarnings(suppressMessages(
+    twitterData <- readLines('dataset/final/en_US/en_US.twitter.txt')))
+suppressWarnings(suppressMessages(
+    newsData <- readLines('dataset/final/en_US/en_US.news.txt')))
+suppressWarnings(suppressMessages(
+    blogData <- readLines('dataset/final/en_US/en_US.blogs.txt')))
+
+twitterSample <- sample(twitterData,5000)
+newsSample <- sample(newsData,1000)
+blogSample <- sample(blogData,2500)
+
+twitterSampleCorpus <- Corpus(VectorSource(twitterSample))
+newsSampleCorpus <- Corpus(VectorSource(newsSample))
+blogSampleCorpus <- Corpus(VectorSource(blogSample))
+```
+
+```{r cleanData, cache=TRUE, include=FALSE}
+rm(blogData)
+rm(newsData)
+rm(twitterData)
+
+cleanText <- function(data) {
+    # Removal of extra whitespaces
+    data <- tm_map(data,stripWhitespace)
+    # Stemming
+    data <- tm_map(data,stemDocument)
+    # Transformation to lowercapse
+    data <- tm_map(data,content_transformer(tolower))
+}
+
+twitterSampleCorpus <- cleanText(twitterSampleCorpus)
+newsSampleCorpus <- cleanText(newsSampleCorpus)
+blogSampleCorpus <- cleanText(blogSampleCorpus)
+
+wordGram <- function(C,n=1) {
+    
+    # http://tm.r-forge.r-project.org/faq.html
+    BigramTokenizer <-
+        function(x)
+            unlist(lapply(ngrams(words(x), n), paste, collapse = " "), use.names = FALSE)
+    
+    tdm <- TermDocumentMatrix(C, control = list(tokenize = BigramTokenizer))
+}
+
+twitterSampleDTM <- wordGram(twitterSampleCorpus,1)
+newsSampleDTM <- wordGram(newsSampleCorpus,1)
+blogSampleDTM <- wordGram(blogSampleCorpus,1)
+```
+
+# Text Features
+
+## Stop words
+Before we remove stopwords, let's have a look at stop word usage for the different datasets. What are the most frequent stop words for each of the datasets? Does the language use of Twitter users differ significantly from bloggers or journalists? We can expect that the Twitter dataset has less stop words since users are confined to 140 characters. But what about bloggers and journalists?
+
+```{r stopwords, include=FALSE}
+wordCountMatrix <- function(data,colname) {
+    # https://stackoverflow.com/questions/21921422/row-sum-for-large-term-document-matrix-simple-triplet-matrix-tm-package
+    data <- data.frame(sort(slam::row_sums(data)),decreasing=T)
+    data <- tibble::rownames_to_column(data,'word')
+    data <- data[,1:2]
+    colnames(data) <- c('word',colname)
+    data <- data[order(-data[,2]),]
+    data
+}
+twitterSampleWordCount <- wordCountMatrix(twitterSampleDTM,'Twitter')
+head(twitterSampleWordCount)
+newsSampleWordCount <- wordCountMatrix(newsSampleDTM,'News')
+blogSampleWordCount <- wordCountMatrix(blogSampleDTM,'Blog')
+
+stops <- data.frame(stopwords())
+colnames(stops) <- 'word'
+
+mergeStopWords <- function(data,stopwordsset = stops) {
+    data <- merge(x=stopwordsset,y=data,by.x='word',by.y='word',all.x=TRUE,all.y=FALSE)
+}
+stopWordsWordCount <- mergeStopWords(twitterSampleWordCount)
+stopWordsWordCount <- mergeStopWords(newsSampleWordCount,stopWordsWordCount)
+stopWordsWordCount <- mergeStopWords(blogSampleWordCount,stopWordsWordCount)
+
+stopWordsWordCountShare <- stopWordsWordCount
+stopWordsWordCountShare$Twitter <- stopWordsWordCountShare$Twitter / sum(twitterSampleWordCount$Twitter)
+stopWordsWordCountShare$News <- stopWordsWordCountShare$News / sum(newsSampleWordCount$News)
+stopWordsWordCountShare$Blog <- stopWordsWordCountShare$Blog / sum(blogSampleWordCount$Blog)
+```
+
+### Stop word density
+First we calculate the stop word density for each of the randomly selected subsamples of the three datasets.
+```{r stopwordDensity}
+twitterStopWordDensity <- round(sum(stopWordsWordCount$Twitter,na.rm=T) / sum(twitterSampleWordCount$Twitter,na.rm=T),4)
+newsStopWordDensity <- round(sum(stopWordsWordCount$News,na.rm=T) / sum(newsSampleWordCount$News,na.rm=T),4)
+blogStopWordDensity <- round(sum(stopWordsWordCount$Blog,na.rm=T) / sum(blogSampleWordCount$Blog,na.rm=T),4)
+```
+
+The stop word density for **Twitter** is **`r twitterStopWordDensity`**. For the **news articles** it is **`r newsStopWordDensity`**. Lastly, for the **blog posts** it is **`r blogStopWordDensity`**. Not surprisingly, the stop word density for Twitter is lower than for the news articles and blog posts. Also, the stop word density is higher for blog posts than for news articles. A possible hypothesis is that news articles are written by professional journalists and they write in a more clear and readable language that uses fewer stop words. 
+
+### Popular stop words
+The next step is to identify the most popular stop words for each of the datasets.
+
+This is the top 10 for stop word usage for the subsample of collected tweets. Since Twitter allows for direct communication between people, the word 'you' is more prevalent than in the other datasets.
+
+```{r twitterstop}
+    print(head(stopWordsWordCountShare[order(-stopWordsWordCountShare$Twitter),c(1,2)],10),row.names=F)
+```
+
+This is the top 10 for stop word usage for the subsample of collected blog posts. Compared to the Twitter data, both the news articles and the blog posts have a higher prevalence of the word 'was'. A good hypothesis is that the conversion on Twitter is real-time. Tweets are about what's happening now while news and blog posts take more time to write and report on the past.
+
+```{r blogstop}
+    print(head(stopWordsWordCountShare[order(-stopWordsWordCountShare$Blog),c(1,3)],10),row.names=F)
+```
+
+This is the top 10 for stop word usage for the subsample of news articles. The top 6 of news articles and blog posts are identical. 
+```{r newsstop}
+    print(head(stopWordsWordCountShare[order(-stopWordsWordCountShare$News),c(1,4)],10),row.names=F)
+```
+
+## n-grams
+
+For each of the datasets we generate a 1-gram, 2-gram and 3-gram. In the following sections, we will zoom in on the tweets, the news articles and the blog posts. Since the words have been reduced to their stems, not all n-grams will make a lot of sense at first sight. For example 'happi new year' should be read as 'happy new year'.
+```{r removestops,cache=TRUE,include=FALSE}
+    twitterSampleCorpus <- tm_map(twitterSampleCorpus, removeWords, stopwords("english"))
+    newsSampleCorpus <- tm_map(newsSampleCorpus, removeWords, stopwords("english"))
+    blogSampleCorpus <- tm_map(blogSampleCorpus, removeWords, stopwords("english"))
+    
+    twitterSampleCorpus <- tm_map(twitterSampleCorpus, removePunctuation, preserve_intra_word_dashes = TRUE)
+    newsSampleCorpus <- tm_map(newsSampleCorpus, removePunctuation, preserve_intra_word_dashes = TRUE)
+    blogSampleCorpus <- tm_map(blogSampleCorpus, removePunctuation, preserve_intra_word_dashes = TRUE)
+    
+    twitterSample1Gram <- wordGram(twitterSampleCorpus,1)
+    twitterSample2Gram <- wordGram(twitterSampleCorpus,2)
+    twitterSample3Gram <- wordGram(twitterSampleCorpus,3)
+    
+    newsSample1Gram <- wordGram(newsSampleCorpus,1)
+    newsSample2Gram <- wordGram(newsSampleCorpus,2)
+    newsSample3Gram <- wordGram(newsSampleCorpus,3)
+    
+    blogSample1Gram <- wordGram(blogSampleCorpus,1)
+    blogSample2Gram <- wordGram(blogSampleCorpus,2)
+    blogSample3Gram <- wordGram(blogSampleCorpus,3)
+    
+    twitter1GCount <- wordCountMatrix(twitterSample1Gram,'count')
+    twitter2GCount <- wordCountMatrix(twitterSample2Gram,'count')
+    twitter3GCount <- wordCountMatrix(twitterSample3Gram,'count')
+    
+    news1GCount <- wordCountMatrix(newsSample1Gram,'count')
+    news2GCount <- wordCountMatrix(newsSample2Gram,'count')
+    news3GCount <- wordCountMatrix(newsSample3Gram,'count')
+    
+    blog1GCount <- wordCountMatrix(blogSample1Gram,'count')
+    blog2GCount <- wordCountMatrix(blogSample2Gram,'count')
+    blog3GCount <- wordCountMatrix(blogSample3Gram,'count')
+    
+    
+```
+
+### Top 10 Twitter 1-gram
+```{r twitter1gram, cache=TRUE}
+print(head(twitter1GCount,10),row.names=F)
+```
+
+### Top 10 Twitter 2-gram
+```{r twitter2gram, cache=TRUE}
+print(head(twitter2GCount,10),row.names=F)
+```
+
+### Top 10 Twitter 3-gram
+```{r twitter3gram, cache=TRUE}
+print(head(twitter3GCount,10),row.names=F)
+```
+
+### Top 10 News 1-gram
+```{r news1gram, cache=TRUE}
+print(head(news1GCount,10),row.names=F)
+```
+
+### Top 10 News 2-gram
+```{r news2gram, cache=TRUE}
+print(head(news2GCount,10),row.names=F)
+```
+
+### Top 10 News 3-gram
+```{r news3gram, cache=TRUE}
+print(head(news3GCount,10),row.names=F)
+```
+
+### Top 10 Blog 1-gram
+```{r blog1gram, cache=TRUE}
+print(head(blog1GCount,10),row.names=F)
+```
+
+### Top 10 Blog 2-gram
+```{r blog2gram, cache=TRUE}
+print(head(blog2GCount,10),row.names=F)
+```
+
+### Top 10 Blog 3-gram
+```{r blog3gram, cache=TRUE}
+print(head(blog3GCount,10),row.names=F)
+```
+
+## Word count
+```{r wordcount,include=FALSE,cache=TRUE}
+twitterDTM <- DocumentTermMatrix(twitterSampleCorpus)
+twitterLength <- data.frame(sort(slam::row_sums(twitterDTM),decreasing=T))
+newsDTM <- DocumentTermMatrix(newsSampleCorpus)
+newsLength <- data.frame(sort(slam::row_sums(newsDTM),decreasing=T))
+blogDTM <- DocumentTermMatrix(blogSampleCorpus)
+blogLength <- data.frame(sort(slam::row_sums(blogDTM),decreasing=T))
+```
+
+### Twitter word count
+The average word count per tweet is **`r mean(twitterLength[,1])`**. The median word count per tweet is **`r median(twitterLength[,1])`**. It is clear from these data descriptions and from the histogram that the data is slightly skewed to the right. The data has a kurtosis of **`r kurtosis(twitterLength[,1])`**. A Shapiro-Wilk test givesa W-value of **`r shapiro.test(twitterLength[,1])$statistic`** with a p-value of **`r round(shapiro.test(twitterLength[,1])$p.value,4)`**. This is a rather high but not higher than the [critical threshold](http://www.statistics4u.info/fundstat_eng/ee_shapiro_wilk_test.html) and significant result. We reject the hypothesis that the distribution of the word count of tweets is not normal.
+
+```{r twitterhistogram, include=TRUE,cache=TRUE}
+    hist(twitterLength[,1],20,xlab="Tweet Word Count",main="Histogram of Tweet Word Count")
+    abline(v = mean(twitterLength[,1]), col = "blue", lwd = 2)
+    abline(v = median(twitterLength[,1]), col = "red", lwd = 2)
+    qqnorm(twitterLength[,1])
+    qqline(twitterLength[,1])
+```
+
+The average word count per tweet is **`r mean(newsLength[,1])`**. The median word count per tweet is **`r median(newsLength[,1])`**. It appears that the news article word count is also skewed to the right. The data has a kurtosis of **`r kurtosis(newsLength[,1])`**. The data is leptokurtic; a lot of variation is explained by extreme values. A Shapiro-Wilk test gives a W-value of **`r shapiro.test(newsLength[,1])$statistic`** with a p-value of **`r round(shapiro.test(newsLength[,1])$p.value,4)`**. This is a rather low and significant result. We  reject the hypothesis that the distribution of the word count of news articles is normal.
+
+```{r newshistogram, include=TRUE,cache=TRUE}
+    hist(newsLength[,1],100,xlab="News Article Word Count",main="Histogram of News Article Word Count",xlim=c(5,50))
+    abline(v = mean(newsLength[,1]), col = "blue", lwd = 2)
+    abline(v = median(newsLength[,1]), col = "red", lwd = 2)
+    qqnorm(newsLength[,1])
+    qqline(newsLength[,1])
+```
+
+The average word count per tweet is **`r mean(blogLength[,1])`**. The median word count per tweet is **`r median(blogLength[,1])`**. It is clear from these data descriptions and from the histogram that the data is heavily skewed to the left. The data has a kurtosis of **`r kurtosis(blogLength[,1])`**. The data is **very** leptokurtic; a lot of variation is explained by extreme values. A Shapiro-Wilk test givesa W-value of **`r shapiro.test(blogLength[,1])$statistic`** with a p-value of **`r round(shapiro.test(blogLength[,1])$p.value,4)`**. We strongly reject the hypothesis that the distribution of the word count of blog posts is normal.
+
+```{r bloghistogram, include=TRUE,cache=TRUE}
+    hist(blogLength[,1],25,xlab="Blog Post Word Count",main="Histogram of Blog Post Word Count",xlim=c(1,200))
+    abline(v = mean(blogLength[,1]), col = "blue", lwd = 2)
+    abline(v = median(blogLength[,1]), col = "red", lwd = 2)
+    qqnorm(blogLength[,1])
+    qqline(blogLength[,1])
+```
+
+It has become clear that the average word count for each of the data types (tweet, blog, news) is different. If we want to answer inferential questions that requires hypothesis tests that are based on normality, we will have to transform the data.
