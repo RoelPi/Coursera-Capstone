@@ -16,7 +16,9 @@ library(slam)
 library(pander)
 library(knitr)
 library(tibble)
-library(e1071) 
+library(e1071)
+library(stringr)
+library(reshape2)
 ```
 
 ## Loading datasets & generating samples
@@ -240,7 +242,7 @@ blogLength <- data.frame(sort(slam::row_sums(blogDTM),decreasing=T))
 ```
 
 ### Twitter word count
-The average word count per tweet is **`r mean(twitterLength[,1])`**. The median word count per tweet is **`r median(twitterLength[,1])`**. It is clear from these data descriptions and from the histogram that the data is slightly skewed to the right. The data has a kurtosis of **`r kurtosis(twitterLength[,1])`**. A Shapiro-Wilk test givesa W-value of **`r shapiro.test(twitterLength[,1])$statistic`** with a p-value of **`r round(shapiro.test(twitterLength[,1])$p.value,4)`**. This is a rather high but not higher than the [critical threshold](http://www.statistics4u.info/fundstat_eng/ee_shapiro_wilk_test.html) and significant result. We reject the hypothesis that the distribution of the word count of tweets is not normal.
+The average word count per tweet is **`r mean(twitterLength[,1])`**. The median word count per tweet is **`r median(twitterLength[,1])`**. It is clear from these data descriptions and from the histogram that the data is slightly skewed to the right. The data has a kurtosis of **`r kurtosis(twitterLength[,1])`**. A Shapiro-Wilk test givesa W-value of **`r shapiro.test(twitterLength[,1])$statistic`** with a p-value of **`r round(shapiro.test(twitterLength[,1])$p.value,4)`**. This is a rather high but not higher than the [critical threshold](http://www.statistics4u.info/fundstat_eng/ee_shapiro_wilk_test.html) and significant result. We reject the hypothesis that the distribution of the word count of tweets is normal.
 
 ```{r twitterhistogram, include=TRUE,cache=TRUE}
     hist(twitterLength[,1],20,xlab="Tweet Word Count",main="Histogram of Tweet Word Count")
@@ -250,7 +252,7 @@ The average word count per tweet is **`r mean(twitterLength[,1])`**. The median 
     qqline(twitterLength[,1])
 ```
 
-The average word count per tweet is **`r mean(newsLength[,1])`**. The median word count per tweet is **`r median(newsLength[,1])`**. It appears that the news article word count is also skewed to the right. The data has a kurtosis of **`r kurtosis(newsLength[,1])`**. The data is leptokurtic; a lot of variation is explained by extreme values. A Shapiro-Wilk test gives a W-value of **`r shapiro.test(newsLength[,1])$statistic`** with a p-value of **`r round(shapiro.test(newsLength[,1])$p.value,4)`**. This is a rather low and significant result. We  reject the hypothesis that the distribution of the word count of news articles is normal.
+The average word count per tweet is **`r mean(newsLength[,1])`**. The median word count per tweet is **`r median(newsLength[,1])`**. It appears that the news article word count is also skewed to the right. The data has a kurtosis of **`r kurtosis(newsLength[,1])`**. The data is leptokurtic; a lot of variation is explained by extreme values. A Shapiro-Wilk test gives a W-value of **`r shapiro.test(newsLength[,1])$statistic`** with a p-value of **`r round(shapiro.test(newsLength[,1])$p.value,4)`**. This is a rather low and significant result. We reject the hypothesis that the distribution of the word count of news articles is normal.
 
 ```{r newshistogram, include=TRUE,cache=TRUE}
     hist(newsLength[,1],100,xlab="News Article Word Count",main="Histogram of News Article Word Count",xlim=c(5,50))
@@ -270,4 +272,30 @@ The average word count per tweet is **`r mean(blogLength[,1])`**. The median wor
     qqline(blogLength[,1])
 ```
 
-It has become clear that the average word count for each of the data types (tweet, blog, news) is different. If we want to answer inferential questions that requires hypothesis tests that are based on normality, we will have to transform the data.
+It has become clear that the average word count for each of the data types (tweet, blog, news) is different. If we want to answer inferential questions regarding word count that requires hypothesis tests that are based on normality, we will have to transform the data.
+
+```{r transitionmatrices, include=TRUE}
+    # https://stackoverflow.com/questions/14096814/r-merging-a-lot-of-data-frames
+    full1GCount <- Reduce(function(...) merge(...,by="word",all=TRUE),list(blog1GCount,news1GCount,twitter1GCount))
+    colnames(full1GCount) <- c('word','blog','news','twitter')
+    full2GCount <- Reduce(function(...) merge(...,by="word",all=TRUE),list(blog2GCount,news2GCount,twitter2GCount))
+    colnames(full2GCount) <- c('word','blog','news','twitter')
+    full3GCount <- Reduce(function(...) merge(...,by="word",all=TRUE),list(blog3GCount,news3GCount,twitter3GCount))
+    colnames(full3GCount) <- c('word','blog','news','twitter')
+   
+createTransitionMatrix <- function(data,skip) {
+    data[is.na(data)] <- 0
+    data <- data %>% mutate(total=twitter+blog+news)
+    data <- subset(data,total>1)
+    splitWords <- str_split_fixed(as.character(data$word)," ",10)[,1:skip]
+    minGrams <- data.frame(paste(splitWords[,1],splitWords[,2]," "))
+    data <- cbind(minGrams,data$word,data$total)
+    colnames(data) <- c('mingrams','word','count')
+    data <- arrange(data,desc(count))
+    data <- dcast(data,mingrams~word,value.var='count')
+    data[is.na(data)] <- 0
+    data <- sapply(data[,2:ncol(data)],function(x) x/rowSums(data[2:ncol(data)]))
+    data
+}
+    head(createTransitionMatrix(full3GCount,2))
+```
