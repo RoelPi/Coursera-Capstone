@@ -26,10 +26,10 @@ library(reshape2)
 The following code loads the Twitter, news and blog data. The complete data is cleaned in the following way:
 
 * Removal of redundant whitespaces
-* Stemming. The process of simplifying words to their stem. More info: https://en.wikipedia.org/wiki/Stemming
 * Transformation of all words to full lowercase
+* Removal of punctuation
 
-In a later phase of the research, the data is also stripped of its 'stop words'. Lastly, each dataset also gets a randomly selected sample for processing speed purposes.
+In a later phase of the research, the data is also stripped of its 'stop words'. Lastly, each dataset also gets a randomly selected sample for processing speed purposes. The samples are 5% of the original datasets.
 
 ```{r getData, cache=TRUE,include=FALSE}
 suppressWarnings(suppressMessages(
@@ -39,9 +39,9 @@ suppressWarnings(suppressMessages(
 suppressWarnings(suppressMessages(
     blogData <- readLines('dataset/final/en_US/en_US.blogs.txt')))
 
-twitterSample <- sample(twitterData,5000)
-newsSample <- sample(newsData,1000)
-blogSample <- sample(blogData,2500)
+twitterSample <- sample(twitterData,length(twitterData)*0.05)
+newsSample <- sample(newsData,length(newsData)*0.05)
+blogSample <- sample(blogData,length(blogData)*0.05)
 
 twitterSampleCorpus <- Corpus(VectorSource(twitterSample))
 newsSampleCorpus <- Corpus(VectorSource(newsSample))
@@ -56,10 +56,10 @@ rm(twitterData)
 cleanText <- function(data) {
     # Removal of extra whitespaces
     data <- tm_map(data,stripWhitespace)
-    # Stemming
-    data <- tm_map(data,stemDocument)
     # Transformation to lowercapse
     data <- tm_map(data,content_transformer(tolower))
+    # Remove punctuation
+    data <- tm_map(data,content_transformer(removePunctuation))
 }
 
 twitterSampleCorpus <- cleanText(twitterSampleCorpus)
@@ -80,6 +80,7 @@ twitterSampleDTM <- wordGram(twitterSampleCorpus,1)
 newsSampleDTM <- wordGram(newsSampleCorpus,1)
 blogSampleDTM <- wordGram(blogSampleCorpus,1)
 ```
+
 
 # Text Features
 
@@ -112,9 +113,9 @@ stopWordsWordCount <- mergeStopWords(newsSampleWordCount,stopWordsWordCount)
 stopWordsWordCount <- mergeStopWords(blogSampleWordCount,stopWordsWordCount)
 
 stopWordsWordCountShare <- stopWordsWordCount
-stopWordsWordCountShare$Twitter <- stopWordsWordCountShare$Twitter / sum(twitterSampleWordCount$Twitter)
-stopWordsWordCountShare$News <- stopWordsWordCountShare$News / sum(newsSampleWordCount$News)
-stopWordsWordCountShare$Blog <- stopWordsWordCountShare$Blog / sum(blogSampleWordCount$Blog)
+stopWordsWordCountShare$Twitter <- round(stopWordsWordCountShare$Twitter / sum(twitterSampleWordCount$Twitter),4)
+stopWordsWordCountShare$News <- round(stopWordsWordCountShare$News / sum(newsSampleWordCount$News),4)
+stopWordsWordCountShare$Blog <- round(stopWordsWordCountShare$Blog / sum(blogSampleWordCount$Blog),4)
 ```
 
 ### Stop word density
@@ -149,7 +150,7 @@ This is the top 10 for stop word usage for the subsample of news articles. The t
 
 ## n-grams
 
-For each of the datasets we generate a 1-gram, 2-gram and 3-gram. In the following sections, we will zoom in on the tweets, the news articles and the blog posts. Since the words have been reduced to their stems, not all n-grams will make a lot of sense at first sight. For example 'happi new year' should be read as 'happy new year'.
+For each of the datasets we generate a 1-gram, 2-gram and 3-gram. In the following sections, we will zoom in on the tweets, the news articles and the blog posts. Since the purpose of this exploratory data analysis is to find a good approach for text prediction, we have decided not to exlude stop words or stem the data.
 ```{r removestops,cache=TRUE,include=FALSE}
     twitterSampleCorpus <- tm_map(twitterSampleCorpus, removeWords, stopwords("english"))
     newsSampleCorpus <- tm_map(newsSampleCorpus, removeWords, stopwords("english"))
@@ -242,7 +243,7 @@ blogLength <- data.frame(sort(slam::row_sums(blogDTM),decreasing=T))
 ```
 
 ### Twitter word count
-The average word count per tweet is **`r mean(twitterLength[,1])`**. The median word count per tweet is **`r median(twitterLength[,1])`**. It is clear from these data descriptions and from the histogram that the data is slightly skewed to the right. The data has a kurtosis of **`r kurtosis(twitterLength[,1])`**. A Shapiro-Wilk test givesa W-value of **`r shapiro.test(twitterLength[,1])$statistic`** with a p-value of **`r round(shapiro.test(twitterLength[,1])$p.value,4)`**. This is a rather high but not higher than the [critical threshold](http://www.statistics4u.info/fundstat_eng/ee_shapiro_wilk_test.html) and significant result. We reject the hypothesis that the distribution of the word count of tweets is normal.
+The average word count per tweet is **`r mean(twitterLength[,1])`**. The median word count per tweet is **`r median(twitterLength[,1])`**. It is clear from the histogram that the data is slightly skewed to the right. Furthermore, he data has a kurtosis of **`r kurtosis(twitterLength[,1])`**. 
 
 ```{r twitterhistogram, include=TRUE,cache=TRUE}
     hist(twitterLength[,1],20,xlab="Tweet Word Count",main="Histogram of Tweet Word Count")
@@ -252,7 +253,8 @@ The average word count per tweet is **`r mean(twitterLength[,1])`**. The median 
     qqline(twitterLength[,1])
 ```
 
-The average word count per tweet is **`r mean(newsLength[,1])`**. The median word count per tweet is **`r median(newsLength[,1])`**. It appears that the news article word count is also skewed to the right. The data has a kurtosis of **`r kurtosis(newsLength[,1])`**. The data is leptokurtic; a lot of variation is explained by extreme values. A Shapiro-Wilk test gives a W-value of **`r shapiro.test(newsLength[,1])$statistic`** with a p-value of **`r round(shapiro.test(newsLength[,1])$p.value,4)`**. This is a rather low and significant result. We reject the hypothesis that the distribution of the word count of news articles is normal.
+### News word count
+The average word count per tweet is **`r mean(newsLength[,1])`**. The median word count per tweet is **`r median(newsLength[,1])`**. It appears that the news article word count is also skewed to the right. The data has a kurtosis of **`r kurtosis(newsLength[,1])`**. The data is leptokurtic; a lot of variation is explained by extreme values. We reject the hypothesis that the distribution of the word count of news articles is normal.
 
 ```{r newshistogram, include=TRUE,cache=TRUE}
     hist(newsLength[,1],100,xlab="News Article Word Count",main="Histogram of News Article Word Count",xlim=c(5,50))
@@ -262,7 +264,8 @@ The average word count per tweet is **`r mean(newsLength[,1])`**. The median wor
     qqline(newsLength[,1])
 ```
 
-The average word count per tweet is **`r mean(blogLength[,1])`**. The median word count per tweet is **`r median(blogLength[,1])`**. It is clear from these data descriptions and from the histogram that the data is heavily skewed to the left. The data has a kurtosis of **`r kurtosis(blogLength[,1])`**. The data is **very** leptokurtic; a lot of variation is explained by extreme values. A Shapiro-Wilk test givesa W-value of **`r shapiro.test(blogLength[,1])$statistic`** with a p-value of **`r round(shapiro.test(blogLength[,1])$p.value,4)`**. We strongly reject the hypothesis that the distribution of the word count of blog posts is normal.
+### Blog word count
+The average word count per tweet is **`r mean(blogLength[,1])`**. The median word count per tweet is **`r median(blogLength[,1])`**. It is clear from these data descriptions and from the histogram that the data is heavily skewed to the left. The data has a kurtosis of **`r kurtosis(blogLength[,1])`**. The data is **very** leptokurtic; a lot of variation is explained by extreme values. We strongly reject the hypothesis that the distribution of the word count of blog posts is normal.
 
 ```{r bloghistogram, include=TRUE,cache=TRUE}
     hist(blogLength[,1],25,xlab="Blog Post Word Count",main="Histogram of Blog Post Word Count",xlim=c(1,200))
@@ -272,30 +275,8 @@ The average word count per tweet is **`r mean(blogLength[,1])`**. The median wor
     qqline(blogLength[,1])
 ```
 
-It has become clear that the average word count for each of the data types (tweet, blog, news) is different. If we want to answer inferential questions regarding word count that requires hypothesis tests that are based on normality, we will have to transform the data.
+# Modelling
+If we want to predict the n+1'th word where n is the amount of words the user has typed we need to work with a solution that calculates the probability of the next term. The probability is based on the aggregated twitter, blog and news data. A typical solution for this kind of problems are Markov chains. Where the choice of words are 'states' and a user can go from one 'state' to the other by typing in the n+1'th word. 
 
-```{r transitionmatrices, include=TRUE}
-    # https://stackoverflow.com/questions/14096814/r-merging-a-lot-of-data-frames
-    full1GCount <- Reduce(function(...) merge(...,by="word",all=TRUE),list(blog1GCount,news1GCount,twitter1GCount))
-    colnames(full1GCount) <- c('word','blog','news','twitter')
-    full2GCount <- Reduce(function(...) merge(...,by="word",all=TRUE),list(blog2GCount,news2GCount,twitter2GCount))
-    colnames(full2GCount) <- c('word','blog','news','twitter')
-    full3GCount <- Reduce(function(...) merge(...,by="word",all=TRUE),list(blog3GCount,news3GCount,twitter3GCount))
-    colnames(full3GCount) <- c('word','blog','news','twitter')
-   
-createTransitionMatrix <- function(data,skip) {
-    data[is.na(data)] <- 0
-    data <- data %>% mutate(total=twitter+blog+news)
-    data <- subset(data,total>1)
-    splitWords <- str_split_fixed(as.character(data$word)," ",10)[,1:skip]
-    minGrams <- data.frame(paste(splitWords[,1],splitWords[,2]," "))
-    data <- cbind(minGrams,data$word,data$total)
-    colnames(data) <- c('mingrams','word','count')
-    data <- arrange(data,desc(count))
-    data <- dcast(data,mingrams~word,value.var='count')
-    data[is.na(data)] <- 0
-    data <- sapply(data[,2:ncol(data)],function(x) x/rowSums(data[2:ncol(data)]))
-    data
-}
-    head(createTransitionMatrix(full3GCount,2))
-```
+
+
