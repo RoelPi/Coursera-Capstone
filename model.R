@@ -1,6 +1,6 @@
 # General settings
 options(scipen=999)
-set.seed(1789)
+set.seed(1999)
 library(tm)
 library(SnowballC)
 library(data.table)
@@ -11,277 +11,87 @@ library(scales)
 library(stringi)
 library(stringr)
 
-# Function to clean the tdm
-cleanText <- function(data) {
-    # Removal of extra whitespaces
-    data <- tm_map(data,stripWhitespace)
-    # Transformation to lowercapse
-    data <- tm_map(data,content_transformer(tolower))
-    # Remove punctuation
-    data <- tm_map(data,content_transformer(removePunctuation))
-    # Remove numbers
-    data <- tm_map(data,content_transformer(removeNumbers))           
-}
-# Function to generate an n-gram
-wordGram <- function(C,n=1) {
-    # Documentation: http://tm.r-forge.r-project.org/faq.html
-    BigramTokenizer <-
-        function(x)
-            unlist(lapply(ngrams(words(x), n), paste, collapse = " "), use.names = FALSE)
-    
-    tdm <- TermDocumentMatrix(C, control = list(tokenize = BigramTokenizer))
-    tdm
-}
-# Function to generate a frequency table
-frequencyTable <- function(dtm) {
-    dtmFreq <- data.table(term=row.names(dtm),freq=slam::row_sums(dtm))
-    dtmFreq$term <- as.character(dtmFreq$term)
-    dtmFreq <- dtmFreq[order(dtmFreq$freq,decreasing=T),]
-    dtmFreq
-}
+# Load necessary functions
+source("cleanText.R")
+source("wordGram.R")
+source("frequencyTable.R")
+source("saveFreqTable.R")
+source("prepareFreqTable.R")
 
 # Load all source data
-# if (!exists("dSource")) dSource <- suppressWarnings(suppressMessages(list(
-#                twitter=readLines('dataset/final/en_US/en_US.twitter.txt'),
-#                news=readLines('dataset/final/en_US/en_US.news.txt'),
-#                blog=readLines('dataset/final/en_US/en_US.blogs.txt'))))
+if (!exists("dSource")) dSource <- suppressWarnings(suppressMessages(list(
+    twitter=readLines('dataset/final/en_US/en_US.twitter.txt'),
+    news=readLines('dataset/final/en_US/en_US.news.txt'),
+    blog=readLines('dataset/final/en_US/en_US.blogs.txt'))))
 
-# Sample for testing purposes
-dSourceSample <- lapply(dSource,function(x) sample(x,length(x)*0.5))
-saveBatchedFreqTable <- function(sourceList,batches) {
-    gc()
-    ptm <- proc.time()[1]
-    ptmAvg <- c()
-    sources <- c()
-    fullFreqTable <- list()
-    # Create necessary directories for temp files
-    suppressWarnings(suppressMessages(dir.create(paste0(getwd(),"/batches"))))
-    suppressWarnings(suppressMessages(dir.create(paste0(getwd(),"/batches/1gram"))))
-    suppressWarnings(suppressMessages(dir.create(paste0(getwd(),"/batches/2gram"))))
-    suppressWarnings(suppressMessages(dir.create(paste0(getwd(),"/batches/3gram"))))
-    suppressWarnings(suppressMessages(dir.create(paste0(getwd(),"/batches/4gram"))))
-    
-    # Aggregate all sources
-    for (i in 1:length(sourceList)) {
-        sources <- c(sources,sourceList[[i]])
+# Take a sample
+dSourceSample <- lapply(dSource,function(x) sample(x,length(x)*0.02))
+
+# Prepare Kneser-Ney Model
+# saveFreqTable(dSourceSample,10)
+# ft <- prepareFreqTable()
+
+# Next word model - Pass a list of n-gram frequency tables prepared for the Kneser-Ney model (prepareFreqTable) and a sentence for next word prediction
+nextWords <- function(freqTable,history = "i am going to",words=list()) {
+    history <- gsub(pattern="'",replacement="",x=history)
+    n <- ifelse(str_count(history," ") >=2,4,str_count(history," ")+1)
+    hist <- list()
+    hist[[1]] <- 0
+    for (i in 2:length(freqTable)) {
+        hist[[i]] <- paste0(tail(unlist(strsplit(history," ")),(i-1)),collapse=" ")
     }
-    
-    # Randomize order of all documents
-    sources <- sample(sources)
-    
-    # Calculate size of batches
-    batchSize <- length(sources)/batches
-    
-    for (i in 1:batches) {
-        # Create batch
-        ptmBatch <- proc.time()[1]
-        batchStart <- (i-1)*batchSize+1
-        batchEnd <- i*batchSize
-        batch <- sources[batchStart:batchEnd]
-        
-        # Create corpus
-        dCorpus <- Corpus(VectorSource(batch))
-        
-        # Clean corpus
-        cleanCorpus <- cleanText(dCorpus)
-        
-        # Create n-grams
-        d1Gram <- wordGram(cleanCorpus,1)
-        d2Gram <- wordGram(cleanCorpus,2)
-        d3Gram <- wordGram(cleanCorpus,3)
-        d4Gram <- wordGram(cleanCorpus,4)
-        allGrams <- list(d1Gram,d2Gram,d3Gram,d4Gram)
-        
-        # Create frequency table
-        freqTable <- lapply(allGrams, function(x) frequencyTable(x))
-        
-        # Save frequency tables to temporary files
-        for (j in 1:length(freqTable)) {
-            saveRDS(freqTable[[j]],file=paste0(getwd(),"/batches/",(j),"gram/batch",i,".Rda"))
+    if (length(words) == 0) {
+        words <- list()
+        words[[1]] <- head(freqTable[[1]]$term,15)
+        for (i in 2:length(freqTable)) {
+            if (n > (i-1)) { words[[i]] <- head(freqTable[[i]][history %like% paste0("^",hist[[i]],"$")]$term,5) }
         }
-        
-        ptmAvg <- c(ptmAvg,proc.time()[1] - ptmBatch)
-        message(paste0("Batch ",i," of ",batches," saved as temporary file. This batch took ",round(proc.time()[1] - ptmBatch,2)," sec to process. Total time elapsed: ",round(proc.time()[1] - ptm,2)," secs. Total batching time estimated: ",round(mean(ptmAvg),2)*batches," sec."))
     }
-    # Merge all temporary files to one big frequency table
-    message("Merging all temporary files. Please be patient.")
-    for (j in 1:4) {
-        ngramTempNames <- paste0(getwd(),"/batches/",j,"gram/batch",seq(1,batches),".Rda")
-        ngramBatches <- lapply(ngramTempNames,function (x) readRDS(x))
-        fullFreqTable <- rbindlist(ngramBatches)
-        fullFreqTable <- fullFreqTable[,.(freq=sum(freq)),by=term]
-
-        saveRDS(fullFreqTable,file=paste0(getwd(),"/batches/",j,"gram.Rda"))
-        rm(fullFreqTable)
-        gc()
-        message(paste0("Success! ",j,"-gram saved."))
-    }
-    message(paste0("Completed. Time elapsed: ",round(proc.time()[1] - ptm,2)," sec."))
-}
-prepareFreqTable <- function() {
-    fullFreqTable <- list()
-    splitTerms <- function() {
-        fft <- list()
-        for (j in 1:4) {
-            fft[[j]] <- readRDS(paste0("batches/",j,"gram.Rda"))
-            
-            # Split n-grams into different columns for each word
-            # fft[[j]] <- fft[[j]][,paste0('word',seq(1:(j+1))) :=tstrsplit(term,' ',fixed=T)]
-            # if (j != 1) {
-            #     patt = sprintf("\\w+( \\w+){0,%d}$", 0)
-            #     fft[[j]] <- fft[[j]][,first := gsub("\\s*\\w*$", "", term)]
-            #     fft[[j]] <- fft[[j]][,last := stri_extract_last_words(term)]
-            #     fft[[j]] <- fft[[j]][,c('term'):=NULL]
-            #     fft[[j]] <- setcolorder(fft[[j]],c('first','last','freq'))
-            # }
-            gc()
-            message(paste0("Success! ",j,"-gram frequency table created & ready for action!"))
-        }
-        fft
-    }
-    if (file.exists("batches/1gram.Rda") & file.exists("batches/2gram.Rda") & file.exists("batches/3gram.Rda") & file.exists("batches/4gram.Rda")) {
-        fullFreqTable <- splitTerms()
-    } else {
-        message("No batches exist.")
-    }
-    fullFreqTable
-}
-
-
-# Next word model
-nextWords <- function(freqTable,history = "going to") {
-    # Parameter 1 - frequency - Term Count
-    # Parameter 2 - D - Modified n1/(n1 + 2*n2)
-    # Parameter 3 - historyCount - Count of history
-    # Parameter 4 - gamma - D*Nn/historyCount for each D & Nn with Nn as the count of unique words following the history that have a frequency > n
-    n <- ifelse(str_count(history," ") >=3,4,str_count(history," ")+1)
-    
-    # Parameter 2
-    ns <- list()
-    ns[[1]] <- nrow(freqTable[[n]][freq==1,])
-    ns[[2]] <- nrow(freqTable[[n]][freq==2,])
-    ns[[3]] <- nrow(freqTable[[n]][freq==3,])
-    ns[[4]] <- nrow(freqTable[[n]][freq==4,])
-    
-    Y <- ns[[1]]/(ns[[1]]+2*ns[[2]])
-    D <- list()
-    D[[1]] <- 1 - 2 * Y *(ns[[2]]/ns[[1]])
-    D[[2]] <- 1 - 2 * Y *(ns[[3]]/ns[[2]])
-    D[[3]] <- 1 - 2 * Y *(ns[[4]]/ns[[3]])
-    
-    # Parameter 3
-    history <- paste(tail(unlist(strsplit(history," ")),n-1),collapse=" ")
-    ftHistoryOnly <- freqTable[[n]][grep(paste0("^",history," "),freqTable[[n]]$term),]
-    historyCount <- sum(ftHistoryOnly$freq)
-    lastWords <- stri_extract_last_words(ftHistoryOnly$term)
-    
-    
-    lastWordsLower <- c()
-    if (n >= 3) { 
-        historyLower <- paste(tail(unlist(strsplit(history," ")),n-2),collapse=" ") 
-        ftHistoryOnlyLower <- freqTable[[n-1]][grep(paste0("^",historyLower," "),freqTable[[n-1]]$term),]
-        historyLowerCount <- sum(ftHistoryOnlyLower$freq)
-        lastWordsLower <- stri_extract_last_words(ftHistoryOnlyLower$term)
-    }
-    
-    Encoding(ftHistoryOnly$term) <- "latin1"
-    Encoding(lastWords) <- "latin1"
-    Encoding(ftHistoryOnlyLower$term) <- "latin1"
-    Encoding(lastWordsLower) <- "latin1"
-    
-    wordList <- unique(c(lastWords,lastWordsLower))
-    
-    # Parameter 4
-    Nn <- list()
-    Nn[[1]] <- length(ftHistoryOnly[freq==1,]$term)
-    Nn[[2]] <- length(ftHistoryOnly[freq==2,]$term)
-    Nn[[3]] <- length(ftHistoryOnly[freq==3,]$term)
-    
-    if (length(ftHistoryOnly$term) == 0) {
-        g <- 1
-    } else {
-            g <- (D[[1]]*Nn[[1]]+D[[2]]*Nn[[2]]+D[[3]]*Nn[[3]])/historyCount
-    }
-    
+    wordList<-unique(unlist(words))
+    wordList
     getProbability <- function(word) {
-        #Parameter 1
-        frequency <- ftHistoryOnly[term==paste(history,word,sep=" "),]$freq
-        if (length(frequency)==0) {
-            frequency <- 0
-            D <- 0
+        pkn <- list()
+        g <- list()
+        for (i in 1:length(freqTable)) {
+            row <- freqTable[[i]][history == hist[[i]] & term == word]
+            
+            pkn[[i]] <- ifelse(nrow(row) > 0,row$pkn,0)
+            g[[i]] <- ifelse(nrow(row) > 0,row$g,1)
         }
-        if (frequency == 1) { D <- D[[1]] }
-        if (frequency == 2) { D <- D[[2]] }
-        if (frequency >= 3) { D <- D[[3]] }
-        
-        result <- as.numeric((frequency - D)/historyCount)
-        if(is.nan(result)) {
-            0
-        } else {
-            result
-        }
+        p <- pkn[[4]]+g[[4]]*(pkn[[3]]+g[[3]]*(pkn[[2]]+g[[2]]*pkn[[1]]))
+        p
     }
-    getLowerProbability <- function(word) {
-        #Parameter 1
-        frequency <- ftHistoryOnlyLower[term==paste(historyLower,word,sep=" "),]$freq
-        if (length(frequency)==0) {
-            frequency <- 0
-            D <- 0
-        }
-        if (frequency == 1) { D <- D[[1]] }
-        if (frequency == 2) { D <- D[[2]] }
-        if (frequency >= 3) { D <- D[[3]] }
-        
-        result <- as.numeric((frequency - D * frequency)/historyLowerCount)
-        if(is.nan(result)) {
-            0
-        } else {
-            result
-        }
-    }
-    freqs <- sapply(wordList,function(x) getProbability(x)+g*getLowerProbability(x))
-    freqs <- data.table(cbind(names(freqs),freqs))
-    colnames(freqs) <- c("term","freq")
-    freqs <- freqs[order(-freq),]
-    freqs
+    wordListProbs <- data.table(term=wordList,prob=sapply(wordList,function(x) getProbability(x)))
+    wordListProbs <- wordListProbs[order(-prob),]
+    print(wordListProbs)
 }
 
-
-loadSampleFreqTable <- function(sourceList = dSource,sampleSize = 0.01) {
-    ptm <- proc.time()[1]
-    
-    # Create sample
-    message(paste0("Creating samples. Time elapsed: ",round((proc.time()[1] - ptm),2)," sec."))
-    dSample <- lapply(sourceList,function(x) sample(x,length(x)*sampleSize))
-    for (i in 1:length(dSample)) {
-        dSamples <- c()
-        dSamples <- c(dSamples,dSample[i])
-    }
-    # Create corpus
-    message(paste0("Making corpuses. Time elapsed: ",round((proc.time()[1] - ptm),2)," sec."))
-    dCorpus <- Corpus(VectorSource(dSamples))               
-    
-    # Clean the corpus
-    message(paste0("Cleaning text. Time elapsed: ",round((proc.time()[1] - ptm),2)," sec."))
-    if (!exists("cleanCorpus")) cleanCorpus <- cleanText(dCorpus)
-    
-    # Make n-Grams
-    message(paste0("Making 2-grams. Time elapsed: ",round((proc.time()[1] - ptm),2)," sec."))
-    if (!exists("d2Gram")) d2Gram <- wordGram(cleanCorpus,2)
-    message(paste0("Making 3-grams. Time elapsed: ",round((proc.time()[1] - ptm),2)," sec."))
-    if (!exists("d3Gram")) d3Gram <- wordGram(cleanCorpus,3)
-    message(paste0("Making 4-grams. Time elapsed: ",round((proc.time()[1] - ptm),2)," sec."))
-    if (!exists("d4Gram")) d4Gram <- wordGram(cleanCorpus,4)
-    
-    message(paste0("Building Model. Time elapsed: ",round((proc.time()[1] - ptm),2)," sec."))
-    freqTable <- list()
-    for (i in 1:length(list(d2Gram,d3Gram,d4Gram))) {
-        # Create frequency table
-        freqTable[[i]] <- frequencyTable(l[[i]])
-    }
-    
-    freqTable <- buildModel()
-    
-    message(paste0("Finished. Time elapsed: ",round((proc.time()[1] - ptm),2)," sec."))
-    freqTable
+# Test
+quizOne <- function(ft) {
+    quizAnswers <- list()
+    quizAnswers[[1]] <- nextWords(ft,"The guy in front of me just bought a pound of bacon, a bouquet, and a case of",words=list("beer","cheese","pretzels","soda"))
+    quizAnswers[[2]] <- nextWords(ft,"You're the reason why I smile everyday. Can you follow me please? It would mean the",words=list("universe","most","world","best"))
+    quizAnswers[[3]] <- nextWords(ft,"Hey sunshine, can you follow me and make me the",words=list("bluest","smelliest","saddest","happiest"))
+    quizAnswers[[4]] <- nextWords(ft,"Very early observations on the Bills game: Offense still struggling but the",words=list("crowd","defense","players","referees"))
+    quizAnswers[[5]] <- nextWords(ft,"Go on a romantic date at the",words=list("beach","movies","groceries","mall"))
+    quizAnswers[[6]] <- nextWords(ft,"Well I'm pretty sure my granny has some old bagpipes in her garage I'll dust them off and be on my",words=list("motorcycle","horse","phone","way"))
+    quizAnswers[[7]] <- nextWords(ft,"Ohhhhh #PointBreak is on tomorrow. Love that film and haven't seen it in quite some",words=list("years","thing","time","weeks"))
+    quizAnswers[[8]] <- nextWords(ft,"After the ice bucket challenge Louis will push his long wet hair out of his eyes with his little",words=list("toes","fingers","ears","eyes"))
+    quizAnswers[[9]] <- nextWords(ft,"Be grateful for the good times and keep the faith during the",words=list("hard","bad","sad","worse"))
+    quizAnswers[[10]] <- nextWords(ft,"If this isn't the cutest thing you've ever seen, then you must be",words=list("insensitive","asleep","callous","insane"))
+    quizAnswers
+}
+quizTwo <- function(ft) {
+    quizAnswers <- list()
+    quizAnswers[[1]] <- nextWords(ft,"When you breathe, I want to be the air for you. I'll be there for you, I'd live and I'd",words=list("eat","die","sleep","give"))
+    quizAnswers[[2]] <- nextWords(ft,"Guy at my table's wife got up to go to the bathroom and I asked about dessert and he started telling me about his",words=list("marital","spiritual","horticultural","financial"))
+    quizAnswers[[3]] <- nextWords(ft,"I'd give anything to see arctic monkeys this",words=list("month","decade","weekend","morning"))
+    quizAnswers[[4]] <- nextWords(ft,"Talking to your mom has the same effect as a hug and helps reduce your",words=list("happiness","sleepiness","stress","hunger"))
+    quizAnswers[[5]] <- nextWords(ft,"When you were in Holland you were like 1 inch away from me but you hadn't time to take a",words=list("look","minute","picture","walk"))
+    quizAnswers[[6]] <- nextWords(ft,"I'd just like all of these questions answered, a presentation of evidence, and a jury to settle the",words=list("case","matter","incident","account"))
+    quizAnswers[[7]] <- nextWords(ft,"I can't deal with unsymetrical things. I can't even hold an uneven number of bags of groceries in each",words=list("toe","arm","hand","finger"))
+    quizAnswers[[8]] <- nextWords(ft,"Every inch of you is perfect from the bottom to the",words=list("top","center","middle","side"))
+    quizAnswers[[9]] <- nextWords(ft,"I’m thankful my childhood was filled with imagination and bruises from playing",words=list("inside","daily","weekly","outside"))
+    quizAnswers[[10]] <- nextWords(ft,"I like how the same people are in almost all of Adam Sandler's",words=list("novels","movies","pictures","stories"))
+    quizAnswers
 }
